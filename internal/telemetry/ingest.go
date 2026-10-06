@@ -24,8 +24,14 @@ func (i *Ingestor) Apply(ctx context.Context, sample Sample) error {
 	if sample.ReceivedAt.IsZero() {
 		sample.ReceivedAt = i.now().UTC()
 	}
-	if err := i.repository.Add(sample); err != nil {
+	accepted, err := i.repository.Accept(sample)
+	if err != nil {
 		return fmt.Errorf("store telemetry sample: %w", err)
+	}
+	if !accepted {
+		// Idempotent redelivery of an already accepted reading: the first
+		// fact stands and projections must not observe it a second time.
+		return nil
 	}
 	for _, sink := range i.sinks {
 		if err := sink.ApplySample(ctx, sample); err != nil {

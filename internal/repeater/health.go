@@ -45,7 +45,14 @@ func (p *HealthProjector) ApplySample(_ context.Context, sample telemetry.Sample
 	if sample.Sequence <= before.LastSequence || sample.Generation < before.TripGeneration {
 		return nil
 	}
+	var latched bool
 	after := repeater.update(func(current *Snapshot) {
+		// Re-check under the write lock so a concurrent projection with the
+		// same sequence cannot replay the trip or overwrite the first reading.
+		if sample.Sequence <= current.LastSequence || sample.Generation < current.TripGeneration {
+			return
+		}
+		latched = current.Health != HealthTripped
 		current.LastSequence = sample.Sequence
 		current.TemperatureC = sample.Value
 		current.UpdatedAt = sample.ObservedAt.UTC()
@@ -56,7 +63,7 @@ func (p *HealthProjector) ApplySample(_ context.Context, sample telemetry.Sample
 			current.Health = HealthNormal
 		}
 	})
-	if before.Health != HealthTripped && after.Health == HealthTripped && p.incidents != nil {
+	if latched && after.Health == HealthTripped && p.incidents != nil {
 		return p.incidents.OpenRepeaterIncident(after.ID, after.TripGeneration)
 	}
 	return nil
